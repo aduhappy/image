@@ -1,76 +1,75 @@
 #!/usr/bin/env bash
-# prefer-ipv6.sh — Enable IPv6 preferred over IPv4 on Debian/Ubuntu
+# enable-ipv6-prefer.sh — combine aduhappy ipv6.sh + auto-detect & backup/restore
 # Usage:
-#   sudo bash prefer-ipv6.sh       # 启用 IPv6 优先
-#   sudo bash prefer-ipv6.sh restore  # 恢复原始配置
+#   sudo bash enable-ipv6-prefer.sh        # 启用 IPv6 优先
+#   sudo bash enable-ipv6-prefer.sh restore  # 恢复原始配置
 
 set -e
 
 GAI_CONF="/etc/gai.conf"
 BACKUP="/etc/gai.conf.backup_ipv6"
 
-echo "=== IPv6 优先脚本 ==="
+function info {
+  echo -e "[INFO] $*"
+}
+function err {
+  echo -e "[ERROR] $*" >&2
+}
 
-# --------------------------
-# 1) 恢复模式
-# --------------------------
 if [[ "$1" == "restore" ]]; then
-    if [[ -f "$BACKUP" ]]; then
-        echo "恢复原始 gai.conf..."
-        cp "$BACKUP" "$GAI_CONF"
-        echo "已恢复。"
-        exit 0
-    else
-        echo "没有找到备份文件：$BACKUP"
-        exit 1
-    fi
+  if [[ -f "$BACKUP" ]]; then
+    info "Restoring original ${GAI_CONF} from backup..."
+    cp "$BACKUP" "$GAI_CONF"
+    info "Restore done."
+    exit 0
+  else
+    err "Backup file not found: $BACKUP"
+    exit 1
+  fi
 fi
 
-# --------------------------
-# 2) 检查 IPv6 支持
-# --------------------------
-echo "- 检查 IPv6 是否启用..."
-if ip addr | grep -q "inet6"; then
-    echo "✓ 本机已启用 IPv6"
+# 检查系统文件
+if [[ ! -f "$GAI_CONF" ]]; then
+  err "$GAI_CONF not found — are you running on a Debian/Ubuntu system?"
+  exit 1
+fi
+
+# 检查 IPv6 支持
+if ip -6 addr show scope global | grep -q "inet6"; then
+  info "Detected at least one global IPv6 address."
 else
-    echo "✗ 未发现 IPv6 地址，本脚本仍会修改优先级，但你可能无法使用 IPv6"
+  info "No global IPv6 address found — system may not have IPv6 connectivity."
 fi
 
-# --------------------------
-# 3) 备份 gai.conf
-# --------------------------
+# 备份
 if [[ ! -f "$BACKUP" ]]; then
-    echo "- 备份 $GAI_CONF 到 $BACKUP"
-    cp "$GAI_CONF" "$BACKUP"
+  info "Backing up ${GAI_CONF} to ${BACKUP}"
+  cp "$GAI_CONF" "$BACKUP"
 else
-    echo "- 已存在备份：$BACKUP（不会覆盖）"
+  info "Backup already exists at ${BACKUP}. Will not overwrite."
 fi
 
-# --------------------------
-# 4) 删除旧的 IPv4 优先规则
-# --------------------------
-echo "- 移除旧的 IPv4 优先 precedence(::ffff:0:0/96)"
-sed -i 's/^\s*precedence\s\+::ffff:0:0\/96\s\+[0-9]\+/# & # disabled for IPv6 prefer/' "$GAI_CONF"
+# 调用原 aduhappy 脚本逻辑（或兼容其方式）  
+# 这里假设原脚本就是对 /etc/gai.conf 做 IPv6 优先设置 —— 我们重复类似逻辑：
 
-# --------------------------
-# 5) 添加 IPv6 优先规则（若不存在）
-# --------------------------
-if ! grep -q "precedence ::/0  100" "$GAI_CONF"; then
-    echo "- 添加 IPv6 优先规则"
-    {
-        echo ""
-        echo "# Prefer IPv6 over IPv4"
-        echo "precedence ::/0  100"
-    } >> "$GAI_CONF"
+info "Updating ${GAI_CONF}: preferring IPv6 over IPv4..."
+
+# 注释掉可能让 IPv4-mapped (::ffff:0:0/96) 优先的 line
+sed -ri 's/^\s*(precedence\s+::ffff:0:0\/96\s+)[0-9]+/# & # disabled for IPv6 prefer/' "$GAI_CONF"
+
+# 如果不存在 IPv6-优先规则，则添加
+if ! grep -q '^precedence ::/0\s\+100' "$GAI_CONF"; then
+  {
+    echo ""
+    echo "# Added by enable-ipv6-prefer.sh — prefer IPv6"
+    echo "precedence ::/0  100"
+  } >> "$GAI_CONF"
+  info "Inserted 'precedence ::/0  100' to prefer IPv6."
 else
-    echo "- 已存在 IPv6 优先规则，跳过"
+  info "IPv6-prefer rule already present — skipping insertion."
 fi
 
-echo ""
-echo "=== 完成 ==="
-echo "现在系统将优先使用 IPv6。你可以测试："
-echo "  ping6 google.com"
-echo "  curl -6 https://ip.sb"
-echo ""
-echo "如需恢复原来的配置："
-echo "  sudo bash prefer-ipv6.sh restore"
+info "Done. Now system should prefer IPv6 if available."
+info "To test: ping6 google.com ； 或 curl -6 https://ip.sb"
+info "If you encounter network problems, restore original config via:"
+info "  sudo bash $0 restore"
